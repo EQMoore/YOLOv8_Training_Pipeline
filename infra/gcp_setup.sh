@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-#
+#Credit : Claude
+
 # One-time GCP setup for the YOLO Batch Training API.
 #
 # Creates: enabled APIs, an Artifact Registry Docker repo, the GCS bucket,

@@ -78,9 +78,9 @@ jobs:
       - name: Build and push the API and trainer images
         run: |
           set -euo pipefail
-          docker build . --file api.DOCKERFILE \
+          docker build api --file api/api.DOCKERFILE \
             --tag "$REGISTRY/yolo-api:$GITHUB_SHA" --tag "$REGISTRY/yolo-api:latest"
-          docker build container_image --file container_image/trainer.DOCKERFILE \
+          docker build trainer_image --file trainer_image/trainer.DOCKERFILE \
             --tag "$REGISTRY/yolo-trainer:$GITHUB_SHA" --tag "$REGISTRY/yolo-trainer:latest"
           docker push "$REGISTRY/yolo-api:$GITHUB_SHA"
           docker push "$REGISTRY/yolo-api:latest"

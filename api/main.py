@@ -17,6 +17,9 @@ app = FastAPI()
 
 #resource names go into GCS object paths, so keep them to a safe character set
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+#job_id is "yolo-train-{user_id}-{uuid}"; longer than a resource name, and it
+#is interpolated into a Vertex list filter, so keep it to a safe character set
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _ARTIFACTS = {"final_model.pt", "final_model.onnx", "final_model.quant.onnx"}
 
 
@@ -70,6 +73,16 @@ def train_yolo(
         ) from exc
 
     return {"job_id": job_id, "user_id": user_id, "model": model, "status": "submitted"}
+
+
+@app.get("/job_status")
+def job_status(job_id: str, user_id: str = Depends(current_user)):
+    if not _JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=400, detail="Invalid job_id")
+    status = gcs_util.get_training_status(job_id, user_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return status
 
 
 @app.get("/get_models")

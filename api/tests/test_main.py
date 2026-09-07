@@ -124,6 +124,33 @@ def test_train_yolo_submit_failure_survives_cleanup_error(client, monkeypatch):
     assert resp.status_code == 502
 
 
+def test_job_status_rejects_invalid_id(client):
+    resp = client.get("/job_status", params={"job_id": "bad id!"})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Invalid job_id"
+
+
+def test_job_status_not_found(client, monkeypatch):
+    monkeypatch.setattr(main.gcs_util, "get_training_status", lambda job_id, user_id: None)
+    resp = client.get("/job_status", params={"job_id": "yolo-train-alice-abc123"})
+    assert resp.status_code == 404
+
+
+def test_job_status_returns_state(client, monkeypatch):
+    seen = {}
+
+    def fake_status(job_id, user_id):
+        seen["job_id"] = job_id
+        seen["user_id"] = user_id
+        return {"job_id": job_id, "state": "PIPELINE_STATE_RUNNING"}
+
+    monkeypatch.setattr(main.gcs_util, "get_training_status", fake_status)
+    resp = client.get("/job_status", params={"job_id": "yolo-train-alice-abc123"})
+    assert resp.status_code == 200
+    assert resp.json() == {"job_id": "yolo-train-alice-abc123", "state": "PIPELINE_STATE_RUNNING"}
+    assert seen == {"job_id": "yolo-train-alice-abc123", "user_id": "alice"}
+
+
 def test_get_models(client, monkeypatch):
     monkeypatch.setattr(main.gcs_util, "get_user_models", lambda uid: [f"{uid}/m.zip"])
     resp = client.get("/get_models")

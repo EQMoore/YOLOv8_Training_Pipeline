@@ -54,13 +54,16 @@ def submit_training_job(dataset_gcs_uri: str, user_id: str, model_name: str,
         location=REGION,
         staging_bucket=f"gs://{BUCKET_NAME}",
     )
-    job_id = f"yolo-train-{uuid.uuid4()}"
+    #the user id is embedded so get_training_status can prove ownership of a
+    #job_id without a database and without ever querying Vertex for someone
+    #else's job
+    job_id = f"yolo-train-{user_id}-{uuid.uuid4()}"
 
     job = aiplatform.CustomContainerTrainingJob(
         display_name=job_id,
         container_uri=VERTEX_CONTAINER_URI,
     )
-    #trainer CLI: container_image/main.py -- all args are --flag=value strings
+    #trainer CLI: trainer_image/main.py -- all args are --flag=value strings
     args = [
         f"--dataset_zip={dataset_gcs_uri}",
         f"--user_id={user_id}",
@@ -88,3 +91,30 @@ def submit_training_job(dataset_gcs_uri: str, user_id: str, model_name: str,
     job.submit(**submit_kwargs)
 
     return job_id
+
+def get_training_status(job_id: str, user_id: str):
+    #job_ids encode their owner (yolo-train-{user_id}-{uuid}); refuse anything
+    #that isn't this caller's before ever touching Vertex, so this endpoint
+    #can't be used to read or enumerate another user's jobs
+    if not job_id.startswith(f"yolo-train-{user_id}-"):
+        return None
+
+    if not all([PROJECT_ID, REGION]):
+        raise RuntimeError("Missing required environment: PROJECT_ID, REGION")
+
+    aiplatform.init(project=PROJECT_ID, location=REGION)
+    jobs = aiplatform.CustomContainerTrainingJob.list(filter=f'display_name="{job_id}"')
+    if not jobs:
+        return None
+
+    job = jobs[0]
+    status = {"job_id": job_id, "state": job.state.name}
+    #best-effort: the failure message lives on the underlying pipeline proto,
+    #which isn't part of the SDK's stable public surface
+    try:
+        message = job._gca_resource.error.message
+    except AttributeError:
+        message = ""
+    if message:
+        status["error"] = message
+    return status

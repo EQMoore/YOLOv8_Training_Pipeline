@@ -1,5 +1,4 @@
 .git
-.github
 .idea
 .venv
 venv
@@ -8,6 +7,3 @@ __pycache__
 *.pyc
 .env
 tests
-container_image
-infra
-README.md

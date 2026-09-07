@@ -15,6 +15,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build the API Docker image
-      run: docker build . --file api.DOCKERFILE --tag yolo-api:${{ github.sha }}
+      run: docker build api --file api/api.DOCKERFILE --tag yolo-api:${{ github.sha }}
     - name: Build the trainer Docker image
-      run: docker build container_image --file container_image/trainer.DOCKERFILE --tag yolo-trainer:${{ github.sha }}
+      run: docker build trainer_image --file trainer_image/trainer.DOCKERFILE --tag yolo-trainer:${{ github.sha }}

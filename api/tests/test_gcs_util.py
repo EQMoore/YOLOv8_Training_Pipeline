@@ -115,6 +115,8 @@ def test_delete_from_gcs(bucket):
 
 class _FakeTrainingJob:
     instances = []
+    list_results = []
+    last_list_filter = None
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
@@ -123,6 +125,11 @@ class _FakeTrainingJob:
 
     def submit(self, **kwargs):
         self.submitted = kwargs
+
+    @classmethod
+    def list(cls, filter=None):
+        cls.last_list_filter = filter
+        return cls.list_results
 
 
 class _FakeAiplatform:
@@ -138,6 +145,8 @@ class _FakeAiplatform:
 @pytest.fixture
 def vertex(monkeypatch):
     _FakeTrainingJob.instances = []
+    _FakeTrainingJob.list_results = []
+    _FakeTrainingJob.last_list_filter = None
     fake = _FakeAiplatform()
     monkeypatch.setattr(gcs_util, "aiplatform", fake)
     monkeypatch.setattr(gcs_util, "BUCKET_NAME", "bkt")
@@ -153,7 +162,7 @@ def test_submit_training_job_success(vertex):
     job_id = gcs_util.submit_training_job(
         "gs://bkt/alice/m.zip", "alice", "m", 5, 8, "yolov8s"
     )
-    assert job_id.startswith("yolo-train-")
+    assert job_id.startswith("yolo-train-alice-")
     assert vertex.init_kwargs == {
         "project": "proj",
         "location": "us-central1",
@@ -192,6 +201,75 @@ def test_submit_training_job_attaches_gpu_when_configured(vertex, monkeypatch):
     assert job.submitted["machine_type"] == "n1-standard-16"
     assert job.submitted["accelerator_type"] == "NVIDIA_TESLA_T4"
     assert job.submitted["accelerator_count"] == 2
+
+
+class _FakeState:
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakeGcaResource:
+    def __init__(self, error_message=""):
+        class _Error:
+            def __init__(self, message):
+                self.message = message
+
+        self.error = _Error(error_message)
+
+
+class _FakeListedJob:
+    #a job as returned by CustomContainerTrainingJob.list()
+    def __init__(self, state_name, error_message=""):
+        self.state = _FakeState(state_name)
+        self._gca_resource = _FakeGcaResource(error_message)
+
+
+class _FakeListedJobNoDetail:
+    #mimics an SDK version where the private error-detail attribute is absent
+    def __init__(self, state_name):
+        self.state = _FakeState(state_name)
+
+
+def test_get_training_status_rejects_mismatched_owner(vertex):
+    #job_id doesn't embed this caller's user_id -> refused without querying Vertex
+    assert gcs_util.get_training_status("yolo-train-bob-abc123", "alice") is None
+    assert _FakeTrainingJob.last_list_filter is None
+
+
+def test_get_training_status_not_found(vertex):
+    result = gcs_util.get_training_status("yolo-train-alice-abc123", "alice")
+    assert result is None
+    assert _FakeTrainingJob.last_list_filter == 'display_name="yolo-train-alice-abc123"'
+
+
+def test_get_training_status_running(vertex):
+    _FakeTrainingJob.list_results = [_FakeListedJob("PIPELINE_STATE_RUNNING")]
+    result = gcs_util.get_training_status("yolo-train-alice-abc123", "alice")
+    assert result == {"job_id": "yolo-train-alice-abc123", "state": "PIPELINE_STATE_RUNNING"}
+
+
+def test_get_training_status_failed_includes_error(vertex):
+    _FakeTrainingJob.list_results = [
+        _FakeListedJob("PIPELINE_STATE_FAILED", "quota exceeded")
+    ]
+    result = gcs_util.get_training_status("yolo-train-alice-abc123", "alice")
+    assert result == {
+        "job_id": "yolo-train-alice-abc123",
+        "state": "PIPELINE_STATE_FAILED",
+        "error": "quota exceeded",
+    }
+
+
+def test_get_training_status_tolerates_missing_error_detail(vertex):
+    _FakeTrainingJob.list_results = [_FakeListedJobNoDetail("PIPELINE_STATE_RUNNING")]
+    result = gcs_util.get_training_status("yolo-train-alice-abc123", "alice")
+    assert result == {"job_id": "yolo-train-alice-abc123", "state": "PIPELINE_STATE_RUNNING"}
+
+
+def test_get_training_status_missing_env(monkeypatch):
+    monkeypatch.setattr(gcs_util, "PROJECT_ID", None)
+    with pytest.raises(RuntimeError):
+        gcs_util.get_training_status("yolo-train-alice-abc123", "alice")
 
 
 def test_submit_training_job_missing_container_uri(monkeypatch):

@@ -1,13 +1,13 @@
 # GCP setup
 
-`gcp_setup.sh` provisions everything the API and its CI need. Run it once, from
+`../infra/gcp_setup.sh` provisions everything the API and its CI need. Run it once, from
 a machine authenticated with an account that has Owner (or an equivalent set of
 admin roles) on the project.
 
 ```bash
 PROJECT_ID=my-project \
 BUCKET_NAME=my-yolo-bucket \
-GITHUB_REPO=my-org/YOLOBatchTrainingAPI \
+GITHUB_REPO=my-org/Yolov8_Training_Pipeline \
 REGION=us-central1 \
   ./infra/gcp_setup.sh
 ```
