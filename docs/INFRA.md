@@ -7,7 +7,7 @@ admin roles) on the project.
 ```bash
 PROJECT_ID=my-project \
 BUCKET_NAME=my-yolo-bucket \
-GITHUB_REPO=my-org/Yolov8_Training_Pipeline \
+GITHUB_REPO=EQMoore/YOLOv8_Training_Pipeline \
 REGION=us-central1 \
   ./infra/gcp_setup.sh
 ```
