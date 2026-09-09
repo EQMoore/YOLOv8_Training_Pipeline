@@ -20,7 +20,7 @@ job submission, or per-tenant storage isolation yourself.
 ## Quickstart
 
 ```bash
-git clone <repo-url> && cd YOLOv8_Training_Pipeline/api
+git clone <repo-url> && cd Yolov8_Training_Pipeline/api
 pip install -r requirements.txt
 
 export API_TOKENS="tok_dev:me"
