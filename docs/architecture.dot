@@ -1,0 +1,77 @@
+// YOLOv8 Training Pipeline — architecture diagram
+// Render: dot -Tpdf docs/architecture.dot -o docs/architecture.pdf
+digraph architecture {
+  graph [rankdir=LR, fontname="Helvetica", fontsize=12, nodesep=0.45, ranksep=0.9,
+         pad=0.4, compound=true, newrank=true,
+         label=<<B>YOLOv8 Training Pipeline — Architecture</B><BR/><FONT POINT-SIZE="10">Solid = runtime request/data flow (numbered) · Dashed = build &amp; deploy · Dotted = config / identity</FONT>>,
+         labelloc=t, fontsize=18];
+  node  [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+         fillcolor="#ffffff", color="#555555", penwidth=1.2];
+  edge  [fontname="Helvetica", fontsize=9, color="#333333", penwidth=1.2];
+
+  // ───────────── Clients ─────────────
+  subgraph cluster_clients {
+    label=<<B>Clients</B>>; style="rounded,filled"; fillcolor="#eef4fb"; color="#7aa6d6";
+    frontend [label=<<B>React Frontend</B><BR/><FONT POINT-SIZE="9">frontend/ · Vite + TypeScript</FONT><BR/><FONT POINT-SIZE="8">Upload tab: validate ZIP in browser (zip.ts)<BR/>Training tab: submit + poll every 15s<BR/>Models / Datasets tabs<BR/>token + job IDs in localStorage</FONT>>];
+    cli [label=<<B>API clients</B><BR/><FONT POINT-SIZE="8">curl / scripts<BR/>Authorization: Bearer &lt;token&gt;</FONT>>];
+  }
+
+  // ───────────── GitHub ─────────────
+  subgraph cluster_github {
+    label=<<B>GitHub Actions</B>>; style="rounded,filled"; fillcolor="#f3f0fa"; color="#9b87c9";
+    gh_ci [label=<<B>CI (non-main pushes / PRs)</B><BR/><FONT POINT-SIZE="8">tests.yml — pytest, 100% coverage gate<BR/>lint-python.yml<BR/>build-docker-images.yml</FONT>>];
+    gh_deploy [label=<<B>Deploy (push to main)</B><BR/><FONT POINT-SIZE="8">deploy.yml: tests → build → push → deploy</FONT>>];
+  }
+
+  // ───────────── GCP ─────────────
+  subgraph cluster_gcp {
+    label=<<B>Google Cloud project</B>  <FONT POINT-SIZE="9">(provisioned once by infra/gcp_setup.sh)</FONT>>;
+    style="rounded,filled"; fillcolor="#f2f8f1"; color="#7cb27a";
+
+    subgraph cluster_run {
+      label=<<B>Cloud Run · yolo-api</B>  <FONT POINT-SIZE="8">SA: yolo-api</FONT>>; style="rounded,filled"; fillcolor="#ffffff"; color="#4f8f4c";
+      main_py [label=<<B>main.py</B> (FastAPI)<BR/><FONT POINT-SIZE="8">POST /train_yolo<BR/>GET /job_status<BR/>GET /get_models<BR/>GET /download_model<BR/>GET /download_model_file</FONT>>, fillcolor="#e6f2e5"];
+      auth_py [label=<<B>auth.py</B><BR/><FONT POINT-SIZE="8">bearer token → user_id<BR/>(from API_TOKENS)</FONT>>, fillcolor="#e6f2e5"];
+      gcs_util [label=<<B>gcs_util.py</B><BR/><FONT POINT-SIZE="8">upload / delete / list blobs<BR/>submit CustomContainerTrainingJob<BR/>get_training_status</FONT>>, fillcolor="#e6f2e5"];
+    }
+
+    secret [label=<<B>Secret Manager</B><BR/><FONT POINT-SIZE="8">api-tokens → API_TOKENS</FONT>>, shape=cylinder, fillcolor="#fff7e0"];
+
+    gcs [label=<<B>Cloud Storage bucket</B><BR/><FONT POINT-SIZE="8">&lt;user&gt;/&lt;model&gt;.zip — datasets<BR/>&lt;user&gt;/&lt;model&gt;/final_model.pt<BR/>&lt;user&gt;/&lt;model&gt;/final_model.onnx<BR/>&lt;user&gt;/&lt;model&gt;/final_model.quant.onnx<BR/>training_outputs/&lt;job_id&gt;/ — Vertex staging</FONT>>,
+         shape=cylinder, fillcolor="#fff7e0"];
+
+    subgraph cluster_vertex {
+      label=<<B>Vertex AI · Custom container training job</B>  <FONT POINT-SIZE="8">n1-standard-8 (+ optional GPU)</FONT>>; style="rounded,filled"; fillcolor="#ffffff"; color="#4f8f4c";
+      t_main [label=<<B>trainer main.py</B><BR/><FONT POINT-SIZE="8">args: --dataset_zip --user_id --model<BR/>--arch --epochs --batch<BR/>download + safe-extract ZIP</FONT>>, fillcolor="#e6f2e5"];
+      t_train [label=<<B>train.py</B><BR/><FONT POINT-SIZE="8">Ultralytics YOLOv8 fine-tune<BR/>→ ONNX export (opset 12)<BR/>→ int8 dynamic quantization</FONT>>, fillcolor="#e6f2e5"];
+      t_gcs [label=<<B>trainer_gcs_util.py</B><BR/><FONT POINT-SIZE="8">download dataset / upload artifacts</FONT>>, fillcolor="#e6f2e5"];
+    }
+
+    ar [label=<<B>Artifact Registry · yolo</B><BR/><FONT POINT-SIZE="8">yolo-api:&lt;sha&gt;<BR/>yolo-trainer:&lt;sha&gt;</FONT>>, shape=cylinder, fillcolor="#fff7e0"];
+    iam [label=<<B>IAM / Workload Identity</B><BR/><FONT POINT-SIZE="8">WIF pool "github" → SA yolo-ci<BR/>(keyless, locked to repo)</FONT>>, shape=note, fillcolor="#fff7e0"];
+  }
+
+  // ───────────── Runtime flow ─────────────
+  frontend -> main_py [label="1  HTTPS + Bearer token\n(dev: Vite proxy /api → :8000)"];
+  cli      -> main_py [label="1"];
+  main_py  -> auth_py [label="2  resolve user", arrowhead=normal];
+  main_py  -> gcs_util [label="3"];
+  gcs_util -> gcs     [label="4  upload dataset ZIP"];
+  gcs_util -> t_main  [label="5  submit job\n(image = VERTEX_CONTAINER_URI)", lhead=cluster_vertex];
+  t_gcs    -> gcs     [label="6  read ZIP / 8  write artifacts", dir=both];
+  t_main   -> t_train [label="7  train + export"];
+  t_main   -> t_gcs;
+  gcs_util -> t_main  [label="9  poll job state", style=solid, color="#888888", fontcolor="#666666", constraint=false, lhead=cluster_vertex];
+  main_py  -> gcs     [label="10  list models /\nstream downloads", color="#888888", fontcolor="#666666"];
+
+  // ───────────── Config / identity ─────────────
+  secret -> auth_py [style=dotted, label="API_TOKENS env", color="#b08a2e", fontcolor="#8a6a1e"];
+  iam    -> gh_deploy [style=dotted, label="OIDC impersonation", color="#b08a2e", fontcolor="#8a6a1e", dir=back];
+
+  // ───────────── Build & deploy ─────────────
+  gh_deploy -> ar   [style=dashed, label="docker build + push\nboth images", color="#7a5fb5", fontcolor="#5a429a"];
+  gh_deploy -> main_py [style=dashed, label="gcloud run deploy", color="#7a5fb5", fontcolor="#5a429a", lhead=cluster_run];
+  ar -> main_py [style=dashed, label="API image", color="#7a5fb5", fontcolor="#5a429a", lhead=cluster_run];
+  ar -> t_main  [style=dashed, label="trainer image", color="#7a5fb5", fontcolor="#5a429a", lhead=cluster_vertex];
+  gh_ci -> gh_deploy [style=invis];
+}
