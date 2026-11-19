@@ -141,13 +141,25 @@ echo "== Workload Identity Federation =="
 gcloud iam workload-identity-pools create "$POOL" \
   --location=global --display-name="GitHub Actions" \
   || echo "  pool already exists"
-gcloud iam workload-identity-pools providers create-oidc "$PROVIDER" \
-  --location=global --workload-identity-pool="$POOL" \
-  --display-name="GitHub" \
-  --issuer-uri="https://token.actions.githubusercontent.com" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
-  --attribute-condition="assertion.repository=='${GITHUB_REPO}'" \
-  || echo "  provider already exists"
+# Only tokens from this repo's main branch are accepted, so a workflow pushed
+# on any other branch cannot obtain the CI service account's credentials.
+WIF_MAPPING="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref"
+WIF_CONDITION="assertion.repository=='${GITHUB_REPO}' && assertion.ref=='refs/heads/main'"
+if gcloud iam workload-identity-pools providers describe "$PROVIDER" \
+     --location=global --workload-identity-pool="$POOL" >/dev/null 2>&1; then
+  # update in place so re-runs also tighten a provider created by an older version
+  gcloud iam workload-identity-pools providers update-oidc "$PROVIDER" \
+    --location=global --workload-identity-pool="$POOL" \
+    --attribute-mapping="$WIF_MAPPING" \
+    --attribute-condition="$WIF_CONDITION"
+else
+  gcloud iam workload-identity-pools providers create-oidc "$PROVIDER" \
+    --location=global --workload-identity-pool="$POOL" \
+    --display-name="GitHub" \
+    --issuer-uri="https://token.actions.githubusercontent.com" \
+    --attribute-mapping="$WIF_MAPPING" \
+    --attribute-condition="$WIF_CONDITION"
+fi
 # only this repo may impersonate the CI service account
 retry gcloud iam service-accounts add-iam-policy-binding "$CI_SA_EMAIL" \
   --role="roles/iam.workloadIdentityUser" \
